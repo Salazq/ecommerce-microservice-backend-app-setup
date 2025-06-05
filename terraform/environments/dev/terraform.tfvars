@@ -15,7 +15,7 @@ variable "location" {
 
 variable "node_count" {
   description = "The number of nodes in the AKS cluster."
-  default     = 3
+  default     = 1
 }
 
 variable "kubernetes_version" {

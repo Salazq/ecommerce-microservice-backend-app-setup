@@ -11,7 +11,7 @@ variable "resource_group_name" {
 variable "node_count" {
   description = "The number of nodes in the AKS cluster."
   type        = number
-  default     = 3
+  default     = 1
 }
 
 variable "kubernetes_version" {
