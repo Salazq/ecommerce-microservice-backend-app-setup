@@ -18,7 +18,6 @@ module "aks" {
   location           = azurerm_resource_group.staging_rg.location
   aks_cluster_name   = var.aks_cluster_name
   node_count         = var.node_count
-  kubernetes_version = var.kubernetes_version
   dns_prefix         = var.dns_prefix
   vm_size            = var.vm_size
 }

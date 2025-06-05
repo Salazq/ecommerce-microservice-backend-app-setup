@@ -14,12 +14,6 @@ variable "node_count" {
   default     = 1
 }
 
-variable "kubernetes_version" {
-  description = "The version of Kubernetes to use."
-  type        = string
-  default     = "1.21.2"
-}
-
 variable "dns_prefix" {
   description = "The DNS prefix for the AKS cluster."
   type        = string
