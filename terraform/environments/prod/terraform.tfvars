@@ -1,24 +1,10 @@
-variable "resource_group_name" {
-  description = "The name of the resource group for the production environment."
-  default     = "prod-resource-group"
-}
-
-variable "aks_cluster_name" {
-  description = "The name of the AKS cluster."
-  default     = "prod-aks-cluster"
-}
-
-variable "node_count" {
-  description = "The number of nodes in the AKS cluster."
-  default     = 1
-}
-
-variable "kubernetes_version" {
-  description = "The version of Kubernetes to use."
-  default     = "1.21.2"
-}
-
-variable "location" {
-  description = "The Azure region where resources will be created."
-  default     = "East US"
-}
+resource_group_name     = "prod-resource-group"
+aks_cluster_name        = "prod-aks-cluster"
+location               = "East US"
+node_count             = 1
+kubernetes_version     = "1.21.2"
+dns_prefix             = "prod-aks"
+vm_size                = "Standard_B2s"
+prefix                 = "prod"
+address_space          = ["10.1.0.0/16"]
+subnet_address_prefixes = ["10.1.1.0/24"]

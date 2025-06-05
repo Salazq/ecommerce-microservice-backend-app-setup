@@ -26,6 +26,7 @@ stages:
   jobs:
     - job: PlanAndApply
       continueOnError: false
+      timeoutInMinutes: 30
       steps:
         # Paso 1: Instalar Terraform
         - task: TerraformInstaller@0
@@ -35,17 +36,16 @@ stages:
 
         # Paso 2: Verificar versión
         - script: terraform --version
-          displayName: 'Check Terraform version'
-
-        # Paso 3: Verificar estructura de directorios
+          displayName: 'Check Terraform version'        # Paso 3: Verificar estructura de directorios
         - script: |
             echo "Working with environment: ${{ parameters.environment }}"
             echo "Environment path: $(environmentPath)"
-            ls -la $(System.DefaultWorkingDirectory)/
-            ls -la $(System.DefaultWorkingDirectory)/$(environmentPath)/ || echo "Directory not found"
-          displayName: 'Check directory structure'
-
-        # Paso 4: Terraform init
+            echo "Current directory: $(System.DefaultWorkingDirectory)"
+            ls -la $(System.DefaultWorkingDirectory)/ || dir $(System.DefaultWorkingDirectory)\
+            ls -la $(System.DefaultWorkingDirectory)/$(environmentPath)/ || dir $(System.DefaultWorkingDirectory)\$(environmentPath)\ || echo "Directory not found"
+            echo "Files in environment directory:"
+            ls -la $(System.DefaultWorkingDirectory)/$(environmentPath)/*.tf $(System.DefaultWorkingDirectory)/$(environmentPath)/*.tfvars 2>/dev/null || dir $(System.DefaultWorkingDirectory)\$(environmentPath)\*.tf $(System.DefaultWorkingDirectory)\$(environmentPath)\*.tfvars 2>nul || echo "No .tf or .tfvars files found"
+          displayName: 'Check directory structure and files'# Paso 4: Terraform init
         - task: TerraformTaskV4@4
           inputs:
             provider: 'azurerm'
@@ -57,40 +57,79 @@ stages:
             backendAzureRmContainerName: 'tfstate'
             backendAzureRmKey: '${{ parameters.environment }}-aks.tfstate'
           displayName: 'Terraform init'
-        
-        
 
-        # Paso 5: Terraform plan (guardando output)
-        - script: |
-            cd $(System.DefaultWorkingDirectory)/$(environmentPath)
-            terraform plan -out=plan.out
-            # Asegurar que el archivo existe
-            if [ ! -f plan.out ]; then
-              echo "##vso[task.logissue type=warning]plan.out not created, creating empty file"
-              touch plan.out
-            fi
-            echo "Plan file created for environment: ${{ parameters.environment }}"
-          displayName: 'Terraform Plan with output'
+        # Paso 5: Terraform validate
+        - task: TerraformTaskV4@4
+          inputs:
+            provider: 'azurerm'
+            command: 'validate'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/$(environmentPath)'
+          displayName: 'Terraform validate'
 
-        # Paso 6: Publicar artefacto del plan
+        # Paso 6: Terraform plan (usando task oficial)
+        - task: TerraformTaskV4@4
+          inputs:
+            provider: 'azurerm'
+            command: 'plan'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/$(environmentPath)'
+            environmentServiceNameAzureRM: $(AZURE_ACCOUNT)
+            commandOptions: '-out=plan.out -var-file=terraform.tfvars'
+          displayName: 'Terraform Plan'        # Paso 6: Terraform plan (usando task oficial)
+        - task: TerraformTaskV4@4
+          inputs:
+            provider: 'azurerm'
+            command: 'plan'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/$(environmentPath)'
+            environmentServiceNameAzureRM: $(AZURE_ACCOUNT)
+            commandOptions: '-out=plan.out -var-file=terraform.tfvars'
+          displayName: 'Terraform Plan'
+
+        # Paso 7: Publicar artefacto del plan
         - task: PublishPipelineArtifact@1
           inputs:
             targetPath: '$(System.DefaultWorkingDirectory)/$(environmentPath)/plan.out'
             artifact: 'Plan-${{ parameters.environment }}'
             publishLocation: 'pipeline'
           displayName: 'Publish Plan Artifact'
-          # Publica el archivo del plan como un artefacto para usarlo en etapas posteriores.
+          condition: succeeded()
 
-        # Paso 7: Terraform apply
-        - script: |
-            cd $(System.DefaultWorkingDirectory)/$(environmentPath)
-            terraform apply -auto-approve plan.out
-            echo "Applied Terraform configuration for environment: ${{ parameters.environment }}"
-          displayName: 'Terraform Apply'
-
-        # Paso 8: Mostrar outputs (opcional)
-        - script: |
-            cd $(System.DefaultWorkingDirectory)/$(environmentPath)
-            terraform output
+        # Paso 8: Terraform apply
+        - task: TerraformTaskV4@4
+          inputs:
+            provider: 'azurerm'
+            command: 'apply'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/$(environmentPath)'
+            environmentServiceNameAzureRM: $(AZURE_ACCOUNT)
+            commandOptions: '-auto-approve plan.out'
+          displayName: 'Terraform Apply - ${{ parameters.environment }}'        # Paso 9: Mostrar outputs
+        - task: TerraformTaskV4@4
+          inputs:
+            provider: 'azurerm'
+            command: 'output'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/$(environmentPath)'
+            environmentServiceNameAzureRM: $(AZURE_ACCOUNT)
           displayName: 'Show Terraform Outputs'
           continueOnError: true
+
+        # Paso 10: Validar deployment
+        - script: |
+            echo "Deployment completed for environment: ${{ parameters.environment }}"
+            echo "Validating deployment..."
+            cd $(System.DefaultWorkingDirectory)/$(environmentPath)
+            # Verificar estado de Terraform
+            terraform show -json > terraform_state.json 2>/dev/null || echo "Could not export state"
+            # Mostrar resumen de recursos creados
+            terraform state list 2>/dev/null || echo "Could not list state"
+            echo "Deployment validation completed"
+          displayName: 'Validate Deployment'
+          continueOnError: true
+
+        # Paso 11: Cleanup temporal files
+        - script: |
+            cd $(System.DefaultWorkingDirectory)/$(environmentPath)
+            # Limpiar archivos temporales pero conservar el estado
+            rm -f plan.out terraform_state.json 2>/dev/null || del plan.out terraform_state.json 2>nul
+            echo "Cleanup completed"
+          displayName: 'Cleanup temporary files'
+          continueOnError: true
+          condition: always()

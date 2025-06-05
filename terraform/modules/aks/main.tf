@@ -1,13 +1,9 @@
-resource "azurerm_resource_group" "aks_rg" {
-  name     = var.resource_group_name
-  location = var.resource_group_location
-}
-
 resource "azurerm_kubernetes_cluster" "aks" {
-  name                = var.cluster_name
-  location            = azurerm_resource_group.aks_rg.location
-  resource_group_name = azurerm_resource_group.aks_rg.name
+  name                = var.aks_cluster_name
+  location            = var.location
+  resource_group_name = var.resource_group_name
   dns_prefix          = var.dns_prefix
+  kubernetes_version  = var.kubernetes_version
 
   default_node_pool {
     name       = "default"
@@ -19,9 +15,5 @@ resource "azurerm_kubernetes_cluster" "aks" {
     type = "SystemAssigned"
   }
 
-  role_based_access_control {
-    enabled = true
-  }
-
-  tags = var.tags
+  role_based_access_control_enabled = true
 }
