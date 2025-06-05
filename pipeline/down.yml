@@ -1,0 +1,16 @@
+trigger: none
+
+variables:
+  - group: variable-group-taller
+
+steps:
+- task: AzureCLI@2
+  displayName: 'Eliminar grupos de recursos - Network y Dev'
+  inputs:
+    azureSubscription: $(AZURE_ACCOUNT)
+    scriptType: 'pscore'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      az group delete --name NetworkWatcherRG --yes --no-wait
+      az group delete --name dev-resource-group --yes --no-wait
+      echo "Grupos de recursos eliminados o en proceso de eliminación"
