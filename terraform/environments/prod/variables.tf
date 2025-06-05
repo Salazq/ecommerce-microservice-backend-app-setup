@@ -13,7 +13,7 @@ variable "resource_group_name" {
 variable "location" {
   description = "The Azure region where resources will be created."
   type        = string
-  default     = "East US"
+  default     = "eastus"
 }
 
 variable "node_count" {
@@ -25,7 +25,7 @@ variable "node_count" {
 variable "kubernetes_version" {
   description = "The version of Kubernetes to use."
   type        = string
-  default     = "1.21.2"
+  default     = "1.28.0"
 }
 
 variable "dns_prefix" {

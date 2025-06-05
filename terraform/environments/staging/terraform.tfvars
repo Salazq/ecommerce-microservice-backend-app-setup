@@ -1,8 +1,8 @@
 aks_cluster_name        = "staging-aks-cluster"
 resource_group_name     = "staging-resource-group"
-location               = "East US"
+location               = "eastus"
 node_count             = 1
-kubernetes_version     = "1.21.2"
+kubernetes_version     = "1.28.0"
 dns_prefix             = "staging-aks"
 vm_size                = "Standard_B2s"
 prefix                 = "staging"

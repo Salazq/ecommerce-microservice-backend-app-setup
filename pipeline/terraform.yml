@@ -36,7 +36,8 @@ stages:
 
         # Paso 2: Verificar versión
         - script: terraform --version
-          displayName: 'Check Terraform version'        # Paso 3: Verificar estructura de directorios
+          displayName: 'Check Terraform version'        
+          # Paso 3: Verificar estructura de directorios
         - script: |
             echo "Working with environment: ${{ parameters.environment }}"
             echo "Environment path: $(environmentPath)"
@@ -45,7 +46,8 @@ stages:
             ls -la $(System.DefaultWorkingDirectory)/$(environmentPath)/ || dir $(System.DefaultWorkingDirectory)\$(environmentPath)\ || echo "Directory not found"
             echo "Files in environment directory:"
             ls -la $(System.DefaultWorkingDirectory)/$(environmentPath)/*.tf $(System.DefaultWorkingDirectory)/$(environmentPath)/*.tfvars 2>/dev/null || dir $(System.DefaultWorkingDirectory)\$(environmentPath)\*.tf $(System.DefaultWorkingDirectory)\$(environmentPath)\*.tfvars 2>nul || echo "No .tf or .tfvars files found"
-          displayName: 'Check directory structure and files'# Paso 4: Terraform init
+          displayName: 'Check directory structure and files'
+        # Paso 4: Terraform init
         - task: TerraformTaskV4@4
           inputs:
             provider: 'azurerm'
@@ -64,17 +66,7 @@ stages:
             provider: 'azurerm'
             command: 'validate'
             workingDirectory: '$(System.DefaultWorkingDirectory)/$(environmentPath)'
-          displayName: 'Terraform validate'
-
-        # Paso 6: Terraform plan (usando task oficial)
-        - task: TerraformTaskV4@4
-          inputs:
-            provider: 'azurerm'
-            command: 'plan'
-            workingDirectory: '$(System.DefaultWorkingDirectory)/$(environmentPath)'
-            environmentServiceNameAzureRM: $(AZURE_ACCOUNT)
-            commandOptions: '-out=plan.out -var-file=terraform.tfvars'
-          displayName: 'Terraform Plan'        # Paso 6: Terraform plan (usando task oficial)
+          displayName: 'Terraform validate'        # Paso 6: Terraform plan (usando task oficial)
         - task: TerraformTaskV4@4
           inputs:
             provider: 'azurerm'
