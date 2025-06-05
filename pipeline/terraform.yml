@@ -4,14 +4,27 @@ trigger: none
 pool:
   vmImage: ubuntu-latest
 
+parameters:
+- name: environment
+  displayName: 'Select Environment'
+  type: string
+  default: 'dev'
+  values:
+  - dev
+  - staging
+  - prod
+
 variables:
   - group: variable-group-taller
+  - name: environmentPath
+    value: 'terraform/environments/${{ parameters.environment }}'
 
 stages:
-- stage: Terraform_plan
-# Primera etapa: Generar el plan de Terraform.
+- stage: Terraform_plan_apply_${{ parameters.environment }}
+  displayName: 'Terraform Plan & Apply - ${{ parameters.environment }}'
+  # Etapa única: Generar el plan y aplicar Terraform.
   jobs:
-    - job: Plan
+    - job: PlanAndApply
       continueOnError: false
       steps:
         # Paso 1: Instalar Terraform
@@ -24,42 +37,58 @@ stages:
         - script: terraform --version
           displayName: 'Check Terraform version'
 
-        # Paso 3: Crear directorio si no existe
+        # Paso 3: Verificar estructura de directorios
         - script: |
-            mkdir -p $(System.DefaultWorkingDirectory)/terraform
-            cd $(System.DefaultWorkingDirectory)/terraform
-            touch plan.out  # Crear archivo vacío si no existe
-          displayName: 'Create terraform directory'
+            echo "Working with environment: ${{ parameters.environment }}"
+            echo "Environment path: $(environmentPath)"
+            ls -la $(System.DefaultWorkingDirectory)/
+            ls -la $(System.DefaultWorkingDirectory)/$(environmentPath)/ || echo "Directory not found"
+          displayName: 'Check directory structure'
 
         # Paso 4: Terraform init
         - task: TerraformTaskV4@4
           inputs:
             provider: 'azurerm'
             command: 'init'
-            workingDirectory: '$(System.DefaultWorkingDirectory)/terraform'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/$(environmentPath)'
             backendServiceArm: $(AZURE_ACCOUNT)
             backendAzureRmResourceGroupName: 'VM'
             backendAzureRmStorageAccountName: 'vmrecursos'
             backendAzureRmContainerName: 'tfstate'
-            backendAzureRmKey: 'pipelines.tfstate'
+            backendAzureRmKey: '${{ parameters.environment }}-aks.tfstate'
           displayName: 'Terraform init'
 
         # Paso 5: Terraform plan (guardando output)
         - script: |
-            cd $(System.DefaultWorkingDirectory)/terraform
+            cd $(System.DefaultWorkingDirectory)/$(environmentPath)
             terraform plan -out=plan.out
             # Asegurar que el archivo existe
             if [ ! -f plan.out ]; then
               echo "##vso[task.logissue type=warning]plan.out not created, creating empty file"
               touch plan.out
             fi
+            echo "Plan file created for environment: ${{ parameters.environment }}"
           displayName: 'Terraform Plan with output'
 
-        # Paso 6: Publicar artefacto
+        # Paso 6: Publicar artefacto del plan
         - task: PublishPipelineArtifact@1
           inputs:
-            targetPath: '$(System.DefaultWorkingDirectory)/terraform/plan.out'
-            artifact: 'Plan'
+            targetPath: '$(System.DefaultWorkingDirectory)/$(environmentPath)/plan.out'
+            artifact: 'Plan-${{ parameters.environment }}'
             publishLocation: 'pipeline'
           displayName: 'Publish Plan Artifact'
           # Publica el archivo del plan como un artefacto para usarlo en etapas posteriores.
+
+        # Paso 7: Terraform apply
+        - script: |
+            cd $(System.DefaultWorkingDirectory)/$(environmentPath)
+            terraform apply -auto-approve plan.out
+            echo "Applied Terraform configuration for environment: ${{ parameters.environment }}"
+          displayName: 'Terraform Apply'
+
+        # Paso 8: Mostrar outputs (opcional)
+        - script: |
+            cd $(System.DefaultWorkingDirectory)/$(environmentPath)
+            terraform output
+          displayName: 'Show Terraform Outputs'
+          continueOnError: true
