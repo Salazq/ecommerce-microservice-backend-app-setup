@@ -6,6 +6,13 @@ terraform {
     }
   }
   required_version = ">= 1.0"
+  
+  backend "azurerm" {
+    resource_group_name  = "VM"
+    storage_account_name = "vmrecursos"
+    container_name       = "tfstate"
+    key                  = "dev-aks.tfstate"
+  }
 }
 
 provider "azurerm" {

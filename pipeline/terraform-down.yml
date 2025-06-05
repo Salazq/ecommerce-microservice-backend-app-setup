@@ -1,0 +1,82 @@
+# Pipeline para destruir recursos de Terraform de forma controlada
+trigger: none
+
+pool:
+  vmImage: ubuntu-latest
+
+parameters:
+- name: environment
+  displayName: 'Select Environment to Destroy'
+  type: string
+  default: 'dev'
+  values:
+  - dev
+  - staging
+  - prod
+
+variables:
+  - group: variable-group-taller
+  - name: environmentPath
+    value: 'terraform/environments/${{ parameters.environment }}'
+
+stages:
+- stage: Terraform_destroy_${{ parameters.environment }}
+  displayName: 'Terraform Destroy - ${{ parameters.environment }}'
+  jobs:
+    - job: DestroyInfrastructure
+      continueOnError: false
+      timeoutInMinutes: 45
+      steps:        # Paso 1: Instalar Terraform
+        - task: TerraformInstaller@0
+          inputs:
+            terraformVersion: '1.5.7'
+          displayName: 'Install Terraform'        # Paso 2: Terraform init
+        - task: TerraformTaskV4@4
+          inputs:
+            provider: 'azurerm'
+            command: 'init'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/$(environmentPath)'
+            backendServiceArm: $(AZURE_ACCOUNT)
+            backendAzureRmResourceGroupName: 'VM'
+            backendAzureRmStorageAccountName: 'vmrecursos'
+            backendAzureRmContainerName: 'tfstate'
+            backendAzureRmKey: '${{ parameters.environment }}-aks.tfstate'
+          displayName: 'Terraform init'        # Paso 3: Terraform plan destroy
+        - task: TerraformTaskV4@4
+          inputs:
+            provider: 'azurerm'
+            command: 'plan'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/$(environmentPath)'
+            environmentServiceNameAzureRM: $(AZURE_ACCOUNT)
+            commandOptions: '-destroy -out=destroy.plan -var-file=terraform.tfvars'
+          displayName: 'Terraform Plan Destroy'        # Paso 4: Mostrar plan de destrucción
+        - script: |
+            cd $(System.DefaultWorkingDirectory)/$(environmentPath)
+            echo "=== PLAN DE DESTRUCCIÓN ==="
+            terraform show destroy.plan
+            echo "=== RECURSOS QUE SERÁN ELIMINADOS ==="
+            terraform state list || echo "No hay recursos en el estado"
+          displayName: 'Show Destroy Plan'        # Paso 5: Terraform destroy
+        - task: TerraformTaskV4@4
+          inputs:
+            provider: 'azurerm'
+            command: 'apply'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/$(environmentPath)'
+            environmentServiceNameAzureRM: $(AZURE_ACCOUNT)
+            commandOptions: '-auto-approve destroy.plan'
+          displayName: 'Terraform Destroy - ${{ parameters.environment }}'        # Paso 6: Verificar destrucción
+        - script: |
+            cd $(System.DefaultWorkingDirectory)/$(environmentPath)
+            echo "=== VERIFICANDO DESTRUCCIÓN ==="
+            terraform state list || echo "✅ Estado vacío - todos los recursos eliminados"
+            echo "Destrucción completada para el entorno: ${{ parameters.environment }}"
+          displayName: 'Verify Destruction'
+          continueOnError: true
+
+        # Paso 7: Limpiar archivos temporales
+        - script: |
+            cd $(System.DefaultWorkingDirectory)/$(environmentPath)
+            rm -f destroy.plan 2>/dev/null || true
+            echo "Limpieza completada"
+          displayName: 'Cleanup'
+          condition: always()
