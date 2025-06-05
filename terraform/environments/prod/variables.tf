@@ -25,7 +25,7 @@ variable "node_count" {
 variable "kubernetes_version" {
   description = "The version of Kubernetes to use."
   type        = string
-  default     = "1.28.0"
+  default     = "1.29.7"
 }
 
 variable "dns_prefix" {
