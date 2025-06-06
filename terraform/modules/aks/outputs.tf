@@ -16,6 +16,7 @@ output "aks_fqdn" {
 output "aks_public_ip" {
   description = "IP pública del API server del cluster AKS"
   value       = azurerm_kubernetes_cluster.aks.kube_config.0.host
+  sensitive   = true
 }
 
 output "aks_kube_config" {

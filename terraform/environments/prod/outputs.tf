@@ -28,6 +28,7 @@ output "aks_fqdn" {
 output "aks_public_ip" {
   description = "IP pública del API server del cluster AKS"
   value       = module.aks.aks_public_ip
+  sensitive   = true
 }
 
 output "aks_node_resource_group" {
