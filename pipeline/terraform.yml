@@ -197,9 +197,7 @@ stages:
             echo "🛠 Crear namespace logging si no existe"
             kubectl create namespace logging --dry-run=client -o yaml | kubectl apply -f -
             
-            echo "🔍 Verificar recursos disponibles en el cluster"
-            kubectl top nodes || echo "⚠️ Metrics server no disponible"
-            kubectl describe nodes | grep -A 5 "Allocated resources" || echo "⚠️ No se pudo obtener recursos"
+            echo "🧹 Limpiar instalaciones previas"
             helm uninstall elasticsearch -n logging --ignore-not-found
             helm uninstall kibana -n logging --ignore-not-found  
             helm uninstall logstash -n logging --ignore-not-found
@@ -225,11 +223,11 @@ stages:
               --set extraEnvs[0].valueFrom.secretKeyRef.key=password \
               --set security.enabled=false \
               --set protocol=http \
-              --set resources.requests.cpu=10m \
-              --set resources.requests.memory=256Mi \
-              --set resources.limits.cpu=500m \
-              --set resources.limits.memory=512Mi \
-              --set esJavaOpts="-Xms128m -Xmx128m"
+              --set resources.requests.cpu=50m \
+              --set resources.requests.memory=512Mi \
+              --set resources.limits.cpu=200m \
+              --set resources.limits.memory=1Gi \
+              --set esJavaOpts="-Xms256m -Xmx256m"
               
             echo "⏳ Esperar a que Elasticsearch esté listo (puede tardar varios minutos)"
             kubectl wait --for=condition=ready pod -l app=elasticsearch-master -n logging --timeout=600s || echo "⚠️ Timeout esperando Elasticsearch, continuando..."
@@ -245,10 +243,10 @@ stages:
               --set env.ELASTICSEARCH_USERNAME=elastic \
               --set env.ELASTICSEARCH_PASSWORD=changeme123 \
               --set service.type=ClusterIP \
-              --set resources.requests.cpu=10m \
-              --set resources.requests.memory=128Mi \
+              --set resources.requests.cpu=50m \
+              --set resources.requests.memory=256Mi \
               --set resources.limits.cpu=200m \
-              --set resources.limits.memory=256Mi
+              --set resources.limits.memory=512Mi
               
             echo "📝 Crear archivo de configuración para Logstash"
             cat <<EOF > values-logstash.yaml
@@ -278,30 +276,30 @@ stages:
                     codec => rubydebug
                   }
                 }
-              extraEnvs:
-                - name: ELASTIC_USER
-                  value: elastic
-                - name: ELASTIC_PASSWORD
-                  value: changeme123
-                - name: LS_JAVA_OPTS
-                  value: "-Xms64m -Xmx64m"
-              resources:
-                requests:
-                  cpu: 10m
-                  memory: 128Mi
-                limits:
-                  cpu: 200m
-                  memory: 256Mi
-              logstashJavaOpts: "-Xms64m -Xmx64m"
-              service:
-                type: ClusterIP
-                ports:
-                  - name: beats
-                    port: 5044
-                    protocol: TCP
-                    targetPort: 5044
-              replicas: 1
-              EOF
+            extraEnvs:
+              - name: ELASTIC_USER
+                value: elastic
+              - name: ELASTIC_PASSWORD
+                value: changeme123
+              - name: LS_JAVA_OPTS
+                value: "-Xms128m -Xmx128m"
+            resources:
+              requests:
+                cpu: 50m
+                memory: 256Mi
+              limits:
+                cpu: 200m
+                memory: 512Mi
+            logstashJavaOpts: "-Xms128m -Xmx128m"
+            service:
+              type: ClusterIP
+              ports:
+                - name: beats
+                  port: 5044
+                  protocol: TCP
+                  targetPort: 5044
+            replicas: 1
+            EOF
             
             echo "🚀 Instalar Logstash"
             helm install logstash elastic/logstash \
