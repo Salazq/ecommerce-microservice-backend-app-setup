@@ -157,6 +157,7 @@ stages:
             helm repo update
             helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
               --namespace monitoring \
+              --set grafana.adminPassword='MiPassword123' \
               --set grafana.service.type=ClusterIP \
               --set prometheus.service.type=ClusterIP
           displayName: 'Instalar Prometheus y Grafana en monitoring'
