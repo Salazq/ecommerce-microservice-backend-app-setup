@@ -143,6 +143,14 @@ stages:
         - task: HelmInstaller@1
           inputs:
             helmVersionToInstall: '3.13.3'
+        - task: AzureCLI@2
+          displayName: 'Login en AKS'
+          inputs:
+            azureSubscription:  $(AZURE_ACCOUNT)  # Debe estar configurado en Azure DevOps
+            scriptType: 'bash'
+            scriptLocation: 'inlineScript'
+            inlineScript: |
+              az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
 
         - script: |
             echo "🔧 Crear namespace monitoring si no existe"
