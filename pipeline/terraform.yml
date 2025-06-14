@@ -137,27 +137,27 @@ stages:
   jobs:
     - job: InstallMonitoring
       displayName: 'Helm Install kube-prometheus-stack'
+      pool:
+        vmImage: 'ubuntu-latest'
       steps:
         - task: HelmInstaller@1
           inputs:
             helmVersionToInstall: '3.13.3'
-        
-        - task: AzureCLI@2
-          inputs:
-            azureSubscription: $(AZURE_ACCOUNT)
-            scriptType: bash
-            scriptLocation: inlineScript
-            inlineScript: |
-              az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
-          displayName: 'Obtener credenciales de AKS'
 
         - script: |
+            echo "🔧 Crear namespace monitoring si no existe"
             kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+
+            echo "📦 Agregar repositorio Helm de Prometheus"
             helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
             helm repo update
+
+            echo "🚀 Instalar kube-prometheus-stack con configuración para Nginx"
             helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
               --namespace monitoring \
               --set grafana.adminPassword='MiPassword123' \
               --set grafana.service.type=ClusterIP \
-              --set prometheus.service.type=ClusterIP
+              --set grafana.env.GF_SERVER_ROOT_URL='http://localhost/grafana/' \
+              --set prometheus.service.type=ClusterIP \
+              --set prometheus.prometheusSpec.externalUrl='http://localhost/prometheus/'
           displayName: 'Instalar Prometheus y Grafana en monitoring'
