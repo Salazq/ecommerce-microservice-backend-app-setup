@@ -209,7 +209,7 @@ stages:
             helm repo add fluent https://fluent.github.io/helm-charts
             helm repo update
 
-            # Instalación de Elasticsearch con valores corregidos
+            # Elasticsearch sin TLS ni autenticación
             helm install elasticsearch elastic/elasticsearch \
               --namespace logging \
               --set replicas=1 \
@@ -236,6 +236,7 @@ stages:
             helm install kibana elastic/kibana \
               --namespace logging \
               --set elasticsearchHosts="http://elasticsearch-master:9200" \
+              --set elasticsearch.ssl.enabled=false \
               --set service.type=ClusterIP \
               --set service.port=5601 \
               --timeout=10m \
@@ -299,6 +300,8 @@ stages:
             helm install fluent-bit fluent/fluent-bit \
               --namespace logging \
               --values fluent-bit-config.yaml \
+              --set livenessProbe.enabled=false \
+              --set readinessProbe.enabled=false \
               --timeout=5m \
               --wait
 
