@@ -173,18 +173,19 @@ stages:
 
 
 - stage: DeployLoggingStack
-  displayName: 'Instalar ELK Stack (Elasticsearch, Logstash, Kibana)'
+  displayName: 'Instalar ELK Stack Simple'
   dependsOn: DeployMonitoringStack
   condition: succeeded()
   jobs:
-    - job: InstallELK
-      displayName: 'Instalar Elasticsearch, Kibana y Logstash con Helm'
+    - job: InstallELKSimple
+      displayName: 'Instalar ELK Stack Simplificado'
       pool:
         vmImage: 'ubuntu-latest'
       steps:
         - task: HelmInstaller@1
           inputs:
             helmVersionToInstall: '3.13.3'
+
         - task: AzureCLI@2
           displayName: 'Login en AKS'
           inputs:
@@ -193,176 +194,123 @@ stages:
             scriptLocation: 'inlineScript'
             inlineScript: |
               az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
+
         - script: |
-            echo "🛠 Crear namespace logging si no existe"
+            echo "🚀 Instalando ELK Stack simplificado..."
+
             kubectl create namespace logging --dry-run=client -o yaml | kubectl apply -f -
-            
-            echo "🧹 Limpiar instalaciones previas completamente"
+
             helm uninstall elasticsearch -n logging --ignore-not-found
-            helm uninstall kibana -n logging --ignore-not-found  
-            helm uninstall logstash -n logging --ignore-not-found
-            kubectl delete configmap kibana-kibana-helm-scripts -n logging --ignore-not-found
+            helm uninstall kibana -n logging --ignore-not-found
+            helm uninstall fluent-bit -n logging --ignore-not-found
             kubectl delete pvc -n logging --all --ignore-not-found
-            kubectl delete pv --all --ignore-not-found
-            
-            # Esperar a que se limpien los recursos
-            sleep 10
-            
-            echo "🔐 Crear secreto con contraseña de elastic"
-            kubectl delete secret elastic-credentials -n logging --ignore-not-found
-            kubectl create secret generic elastic-credentials --from-literal=password='changeme123' -n logging
-            
-            echo "📦 Agregar repositorio Helm Elastic"
+
             helm repo add elastic https://helm.elastic.co
+            helm repo add fluent https://fluent.github.io/helm-charts
             helm repo update
-            
-            echo "🔍 Verificar StorageClasses disponibles"
-            kubectl get storageclass -o wide
-            
-            echo "🔍 Verificar nodos disponibles"
-            kubectl get nodes -o wide
-            
-            echo "🚀 Instalar Elasticsearch con configuración simplificada"
+
             helm install elasticsearch elastic/elasticsearch \
               --namespace logging \
               --set replicas=1 \
               --set minimumMasterNodes=1 \
-              --set volumeClaimTemplate.storageClassName="default" \
-              --set volumeClaimTemplate.resources.requests.storage=2Gi \
-              --set volumeClaimTemplate.accessModes[0]="ReadWriteOnce" \
-              --set persistence.enabled=true \
-              --set secret.enabled=false \
+              --set persistence.enabled=false \
               --set security.enabled=false \
               --set protocol=http \
               --set httpPort=9200 \
               --set transportPort=9300 \
-              --set resources.requests.cpu=100m \
-              --set resources.requests.memory=1Gi \
-              --set resources.limits.cpu=500m \
-              --set resources.limits.memory=2Gi \
-              --set esJavaOpts="-Xms512m -Xmx512m" \
-              --set sysctlInitContainer.enabled=false \
-              --set readinessProbe.initialDelaySeconds=60 \
-              --set readinessProbe.periodSeconds=30 \
-              --set readinessProbe.timeoutSeconds=10 \
-              --set readinessProbe.failureThreshold=10 \
-              --set clusterHealthCheckParams="wait_for_status=yellow&timeout=30s" \
-              --timeout=15m \
+              --set esJavaOpts="-Xms256m -Xmx256m" \
+              --set clusterName="simple-es" \
+              --set nodeGroup="master" \
+              --set extraEnvs[0].name="discovery.type" \
+              --set extraEnvs[0].value="single-node" \
+              --set extraEnvs[1].name="xpack.security.enabled" \
+              --set extraEnvs[1].value="false" \
+              --timeout=10m \
               --wait
-              
-            echo "🔍 Estado de Elasticsearch después de la instalación:"
-            kubectl get pods -n logging -l app=elasticsearch-master -o wide
-            kubectl get pvc -n logging
-            kubectl get events -n logging --sort-by='.lastTimestamp' | tail -10
-            
-            # Verificar que Elasticsearch esté funcionando antes de continuar
-            echo "⏳ Esperando a que Elasticsearch esté completamente listo..."
-            kubectl wait --for=condition=ready pod -l app=elasticsearch-master -n logging --timeout=900s
-            
-            # Verificar conectividad
-            echo "🔍 Verificar conectividad de Elasticsearch:"
-            kubectl exec -n logging deployment/elasticsearch-master -- curl -s http://localhost:9200/_cluster/health || echo "⚠️ Elasticsearch no responde aún"
-            
-            echo "🚀 Instalar Kibana"
+
+            kubectl wait --for=condition=ready pod -l app=elasticsearch-master -n logging --timeout=300s
+
             helm install kibana elastic/kibana \
               --namespace logging \
               --set elasticsearchHosts="http://elasticsearch-master:9200" \
               --set service.type=ClusterIP \
-              --set resources.requests.cpu=100m \
-              --set resources.requests.memory=512Mi \
-              --set resources.limits.cpu=500m \
-              --set resources.limits.memory=1Gi \
-              --set readinessProbe.initialDelaySeconds=60 \
-              --set readinessProbe.periodSeconds=30 \
-              --set readinessProbe.timeoutSeconds=10 \
-              --set readinessProbe.failureThreshold=10 \
+              --set service.port=5601 \
               --timeout=10m \
               --wait
-              
-            echo "📝 Crear archivo de configuración para Logstash"
-            cat <<EOF > values-logstash.yaml
-            logstashPipeline:
-              logstash.conf: |
-                input {
-                  beats {
-                    port => 5044
-                  }
-                }
-                filter {
-                  if [fields][service] {
-                    mutate {
-                      add_field => { "service_name" => "%{[fields][service]}" }
-                    }
-                  }
-                }
-                output {
-                  elasticsearch {
-                    hosts => ["http://elasticsearch-master:9200"]
-                    index => "logs-%{+YYYY.MM.dd}"
-                  }
-                  stdout {
-                    codec => rubydebug
-                  }
-                }
-            extraEnvs:
-              - name: LS_JAVA_OPTS
-                value: "-Xms256m -Xmx256m"
-            resources:
-              requests:
-                cpu: 100m
-                memory: 512Mi
-              limits:
-                cpu: 500m
-                memory: 1Gi
-            logstashJavaOpts: "-Xms256m -Xmx256m"
-            service:
-              type: ClusterIP
-              ports:
-                - name: beats
-                  port: 5044
-                  protocol: TCP
-                  targetPort: 5044
-            replicas: 1
-            readinessProbe:
-              httpGet:
-                path: /
-                port: 9600
-              initialDelaySeconds: 60
-              periodSeconds: 30
-              timeoutSeconds: 10
-              failureThreshold: 10
-            livenessProbe:
-              httpGet:
-                path: /
-                port: 9600
-              initialDelaySeconds: 120
-              periodSeconds: 30
-              timeoutSeconds: 10
-              failureThreshold: 5
+
+            cat <<EOF > fluent-bit-config.yaml
+            config:
+              service: |
+                [SERVICE]
+                    Daemon Off
+                    Flush 1
+                    Log_Level info
+                    Parsers_File parsers.conf
+                    Parsers_File custom_parsers.conf
+                    HTTP_Server On
+                    HTTP_Listen 0.0.0.0
+                    HTTP_Port 2020
+                    Health_Check On
+
+              inputs: |
+                [INPUT]
+                    Name tail
+                    Path /var/log/containers/*.log
+                    multiline.parser docker, cri
+                    Tag kube.*
+                    Mem_Buf_Limit 50MB
+                    Skip_Long_Lines On
+
+              filters: |
+                [FILTER]
+                    Name kubernetes
+                    Match kube.*
+                    Merge_Log On
+                    Keep_Log Off
+                    K8S-Logging.Parser On
+                    K8S-Logging.Exclude On
+
+              outputs: |
+                [OUTPUT]
+                    Name es
+                    Match kube.*
+                    Host elasticsearch-master.logging.svc.cluster.local
+                    Port 9200
+                    Index fluent-bit
+                    Type _doc
+                    Retry_Limit 3
+                    Replace_Dots On
+                    Logstash_Format On
+                    Logstash_Prefix kubernetes
+                    Logstash_DateFormat %Y.%m.%d
+
+              customParsers: |
+                [PARSER]
+                    Name docker
+                    Format json
+                    Time_Key time
+                    Time_Format %Y-%m-%dT%H:%M:%S.%L
+                    Time_Keep On
             EOF
-            
-            echo "🚀 Instalar Logstash"
-            helm install logstash elastic/logstash \
+
+            helm install fluent-bit fluent/fluent-bit \
               --namespace logging \
-              -f values-logstash.yaml \
-              --timeout=10m \
+              --values fluent-bit-config.yaml \
+              --timeout=5m \
               --wait
-              
-            echo "✅ Verificar el estado final de todos los pods"
+
             kubectl get pods -n logging -o wide
             kubectl get svc -n logging
-            kubectl get pvc -n logging
-            
-            echo "🔍 Verificar logs recientes si hay problemas:"
-            echo "Para Elasticsearch: kubectl logs -n logging -l app=elasticsearch-master --tail=20"
-            echo "Para Kibana: kubectl logs -n logging -l app=kibana --tail=20"
-            echo "Para Logstash: kubectl logs -n logging -l app=logstash --tail=20"
-            
-            echo "📋 Información de conexión:"
-            echo "- Elasticsearch: http://elasticsearch-master.logging.svc.cluster.local:9200"
-            echo "- Kibana: http://kibana-kibana.logging.svc.cluster.local:5601"
-            echo "- Logstash: logstash-logstash-headless.logging.svc.cluster.local:5044"
-            
-            echo "🎉 Instalación del ELK Stack completada!"
-            
-          displayName: 'Desplegar ELK Stack'
+          displayName: 'Instalar ELK Stack Simple'
+
+        - script: |
+            echo "🔍 Verificación post-instalación..."
+
+            sleep 30
+
+            kubectl get pods -n logging -o wide
+            kubectl get svc -n logging
+            kubectl exec -n logging deployment/elasticsearch-master -- curl -s http://localhost:9200/_cluster/health?pretty || echo "Elasticsearch aún iniciando..."
+            kubectl exec -n logging deployment/elasticsearch-master -- curl -s http://localhost:9200/_cat/indices || echo "Sin índices aún..."
+            kubectl get pods -n logging -l app.kubernetes.io/name=fluent-bit
+          displayName: 'Verificación Post-Instalación'
