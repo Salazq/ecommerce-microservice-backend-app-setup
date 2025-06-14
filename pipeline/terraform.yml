@@ -209,6 +209,7 @@ stages:
             helm repo add fluent https://fluent.github.io/helm-charts
             helm repo update
 
+            # Instalación de Elasticsearch con valores corregidos
             helm install elasticsearch elastic/elasticsearch \
               --namespace logging \
               --set replicas=1 \
@@ -225,6 +226,8 @@ stages:
               --set extraEnvs[0].value="single-node" \
               --set extraEnvs[1].name="xpack.security.enabled" \
               --set extraEnvs[1].value="false" \
+              --set extraEnvs[2].name="xpack.security.http.ssl.enabled" \
+              --set extraEnvs[2].value="false" \
               --timeout=10m \
               --wait
 
