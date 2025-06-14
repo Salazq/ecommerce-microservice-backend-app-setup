@@ -197,7 +197,9 @@ stages:
             echo "🛠 Crear namespace logging si no existe"
             kubectl create namespace logging --dry-run=client -o yaml | kubectl apply -f -
             
-            echo "🧹 Limpiar instalaciones previas"
+            echo "🔍 Verificar recursos disponibles en el cluster"
+            kubectl top nodes || echo "⚠️ Metrics server no disponible"
+            kubectl describe nodes | grep -A 5 "Allocated resources" || echo "⚠️ No se pudo obtener recursos"
             helm uninstall elasticsearch -n logging --ignore-not-found
             helm uninstall kibana -n logging --ignore-not-found  
             helm uninstall logstash -n logging --ignore-not-found
@@ -222,10 +224,19 @@ stages:
               --set extraEnvs[0].valueFrom.secretKeyRef.name=elastic-credentials \
               --set extraEnvs[0].valueFrom.secretKeyRef.key=password \
               --set security.enabled=false \
-              --set protocol=http
+              --set protocol=http \
+              --set resources.requests.cpu=10m \
+              --set resources.requests.memory=256Mi \
+              --set resources.limits.cpu=500m \
+              --set resources.limits.memory=512Mi \
+              --set esJavaOpts="-Xms128m -Xmx128m"
               
-            echo "⏳ Esperar a que Elasticsearch esté listo"
-            kubectl wait --for=condition=ready pod -l app=elasticsearch-master -n logging --timeout=300s
+            echo "⏳ Esperar a que Elasticsearch esté listo (puede tardar varios minutos)"
+            kubectl wait --for=condition=ready pod -l app=elasticsearch-master -n logging --timeout=600s || echo "⚠️ Timeout esperando Elasticsearch, continuando..."
+            
+            echo "🔍 Estado actual de Elasticsearch:"
+            kubectl get pods -n logging -l app=elasticsearch-master
+            kubectl describe pods -n logging -l app=elasticsearch-master | grep -A 10 "Events:"
             
             echo "🚀 Instalar Kibana"
             helm install kibana elastic/kibana \
@@ -233,7 +244,11 @@ stages:
               --set elasticsearchHosts="http://elasticsearch-master:9200" \
               --set env.ELASTICSEARCH_USERNAME=elastic \
               --set env.ELASTICSEARCH_PASSWORD=changeme123 \
-              --set service.type=ClusterIP
+              --set service.type=ClusterIP \
+              --set resources.requests.cpu=10m \
+              --set resources.requests.memory=128Mi \
+              --set resources.limits.cpu=200m \
+              --set resources.limits.memory=256Mi
               
             echo "📝 Crear archivo de configuración para Logstash"
             cat <<EOF > values-logstash.yaml
@@ -263,20 +278,30 @@ stages:
                     codec => rubydebug
                   }
                 }
-            extraEnvs:
-              - name: ELASTIC_USER
-                value: elastic
-              - name: ELASTIC_PASSWORD
-                value: changeme123
-            service:
-              type: ClusterIP
-              ports:
-                - name: beats
-                  port: 5044
-                  protocol: TCP
-                  targetPort: 5044
-            replicas: 1
-            EOF
+              extraEnvs:
+                - name: ELASTIC_USER
+                  value: elastic
+                - name: ELASTIC_PASSWORD
+                  value: changeme123
+                - name: LS_JAVA_OPTS
+                  value: "-Xms64m -Xmx64m"
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 128Mi
+                limits:
+                  cpu: 200m
+                  memory: 256Mi
+              logstashJavaOpts: "-Xms64m -Xmx64m"
+              service:
+                type: ClusterIP
+                ports:
+                  - name: beats
+                    port: 5044
+                    protocol: TCP
+                    targetPort: 5044
+              replicas: 1
+              EOF
             
             echo "🚀 Instalar Logstash"
             helm install logstash elastic/logstash \
@@ -284,7 +309,12 @@ stages:
               -f values-logstash.yaml
               
             echo "✅ Verificar el estado de los pods"
-            kubectl get pods -n logging
+            kubectl get pods -n logging -o wide
+            
+            echo "🔍 Verificar logs si hay problemas:"
+            echo "kubectl logs -n logging -l app=elasticsearch-master --tail=20"
+            echo "kubectl logs -n logging -l app=kibana --tail=20"
+            echo "kubectl logs -n logging -l app=logstash --tail=20"
             
             echo "🔍 Mostrar servicios disponibles"
             kubectl get svc -n logging
