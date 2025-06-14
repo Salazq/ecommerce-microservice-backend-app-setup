@@ -18,6 +18,10 @@ variables:
   - group: variable-group-taller
   - name: environmentPath
     value: 'terraform/environments/${{ parameters.environment }}'
+  - name: aksResourceGroup
+    value: '${{ parameters.environment }}-resource-group'
+  - name: aksClusterName
+    value: '${{ parameters.environment }}-aks-cluster'
 
 stages:
 - stage: Terraform_plan_apply_${{ parameters.environment }}
@@ -137,6 +141,15 @@ stages:
         - task: HelmInstaller@1
           inputs:
             helmVersionToInstall: '3.13.3'
+        
+        - task: AzureCLI@2
+          inputs:
+            azureSubscription: $(AZURE_ACCOUNT)
+            scriptType: bash
+            scriptLocation: inlineScript
+            inlineScript: |
+              az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
+          displayName: 'Obtener credenciales de AKS'
 
         - script: |
             kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
