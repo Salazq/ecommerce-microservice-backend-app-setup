@@ -174,108 +174,61 @@ stages:
               --set prometheus.prometheusSpec.routePrefix='/prometheus'
           displayName: 'Instalar Prometheus y Grafana en monitoring'
 
-- stage: PrepareHelmRepos
-  displayName: 'Preparar repositorios Helm'
+
+- stage: InstallELKStack
+  displayName: 'Instalar ELK Stack completo en un solo stage'
   jobs:
-    - job: AddHelmRepos
+    - job: DeployELK
+      displayName: 'Deploy Elasticsearch, Kibana y Fluent Bit'
       pool:
         vmImage: 'ubuntu-latest'
       steps:
         - task: AzureCLI@2
-          displayName: 'Login en Azure y configurar kubectl'
+          displayName: 'Autenticarse en Azure y desplegar ELK'
           inputs:
-            azureSubscription: $(AZURE_ACCOUNT)
+            azureSubscription:  $(AZURE_ACCOUNT)
             scriptType: bash
             scriptLocation: inlineScript
             inlineScript: |
+              echo "🔐 Autenticando en Azure y configurando AKS..."
               az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
 
-        - script: |
-            echo "📥 Añadiendo repositorios de Helm..."
-            helm repo add elastic https://helm.elastic.co
-            helm repo add fluent https://fluent.github.io/helm-charts
-            helm repo update
-          displayName: 'Actualizar Helm Repos'
+              echo "🔧 Añadiendo repositorios Helm..."
+              helm repo add elastic https://helm.elastic.co || true
+              helm repo add fluent https://fluent.github.io/helm-charts || true
+              helm repo update
 
-- stage: InstallElasticsearch
-  displayName: 'Instalar Elasticsearch'
-  dependsOn: PrepareHelmRepos
-  jobs:
-    - job: InstallES
-      pool:
-        vmImage: 'ubuntu-latest'
-      steps:
-        - task: AzureCLI@2
-          displayName: 'Login en Azure y configurar kubectl'
-          inputs:
-            azureSubscription: $(AZURE_ACCOUNT)
-            scriptType: bash
-            scriptLocation: inlineScript
-            inlineScript: |
-              az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
+              echo "🧹 Eliminando posibles instalaciones previas..."
+              helm uninstall elasticsearch -n $(kubernetesNamespace) || true
+              helm uninstall kibana -n $(kubernetesNamespace) || true
+              helm uninstall fluent-bit -n $(kubernetesNamespace) || true
 
-        - script: |
-            echo "📦 Instalando Elasticsearch..."
-            helm upgrade --install elasticsearch elastic/elasticsearch \
-              --namespace $(kubernetesNamespace) \
-              --create-namespace \
-              --set replicas=1 \
-              --set minimumMasterNodes=1 \
-              --set resources.requests.cpu="100m" \
-              --set resources.requests.memory="512Mi" \
-              --set resources.limits.cpu="500m" \
-              --set resources.limits.memory="1Gi" \
-              --wait
-          displayName: 'Helm Install Elasticsearch'
+              echo "🚀 Creando namespace si no existe..."
+              kubectl create namespace $(kubernetesNamespace) --dry-run=client -o yaml | kubectl apply -f -
 
-- stage: InstallKibana
-  displayName: 'Instalar Kibana'
-  dependsOn: InstallElasticsearch
-  jobs:
-    - job: InstallKibana
-      pool:
-        vmImage: 'ubuntu-latest'
-      steps:
-        - task: AzureCLI@2
-          displayName: 'Login en Azure y configurar kubectl'
-          inputs:
-            azureSubscription: $(AZURE_ACCOUNT)
-            scriptType: bash
-            scriptLocation: inlineScript
-            inlineScript: |
-              az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
+              echo "📦 Instalando Elasticsearch..."
+              helm upgrade --install elasticsearch elastic/elasticsearch \
+                --namespace $(kubernetesNamespace) \
+                --set replicas=1 \
+                --set minimumMasterNodes=1 \
+                --set resources.requests.cpu="100m" \
+                --set resources.requests.memory="512Mi" \
+                --set resources.limits.cpu="500m" \
+                --set resources.limits.memory="1Gi" \
+                --wait
 
-        - script: |
-            echo "📊 Instalando Kibana..."
-            helm upgrade --install kibana elastic/kibana \
-              --namespace $(kubernetesNamespace) \
-              --set service.type=ClusterIP \
-              --wait
-          displayName: 'Helm Install Kibana'
+              echo "📊 Instalando Kibana..."
+              helm upgrade --install kibana elastic/kibana \
+                --namespace $(kubernetesNamespace) \
+                --set service.type=ClusterIP \
+                --wait
 
-- stage: InstallFluentBit
-  displayName: 'Instalar Fluent Bit'
-  dependsOn: InstallKibana
-  jobs:
-    - job: InstallFluentBit
-      pool:
-        vmImage: 'ubuntu-latest'
-      steps:
-        - task: AzureCLI@2
-          displayName: 'Login en Azure y configurar kubectl'
-          inputs:
-            azureSubscription: $(AZURE_ACCOUNT)
-            scriptType: bash
-            scriptLocation: inlineScript
-            inlineScript: |
-              az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
+              echo "🔥 Instalando Fluent Bit..."
+              helm upgrade --install fluent-bit fluent/fluent-bit \
+                --namespace $(kubernetesNamespace) \
+                --set backend.type=es \
+                --set backend.es.host=elasticsearch-master \
+                --set backend.es.port=9200 \
+                --wait
 
-        - script: |
-            echo "🔥 Instalando Fluent Bit..."
-            helm upgrade --install fluent-bit fluent/fluent-bit \
-              --namespace $(kubernetesNamespace) \
-              --set backend.type=es \
-              --set backend.es.host=elasticsearch-master \
-              --set backend.es.port=9200 \
-              --wait
-          displayName: 'Helm Install Fluent Bit'
+              echo "✅ ELK Stack instalado correctamente en el namespace '$(kubernetesNamespace)'"
