@@ -171,13 +171,13 @@ stages:
               --set prometheus.prometheusSpec.routePrefix='/prometheus'
           displayName: 'Instalar Prometheus y Grafana en monitoring'
 
-- stage: DeployELKStack
-  displayName: 'Instalar ELK Stack con Helm'
-  dependsOn: Terraform_plan_apply_${{ parameters.environment }}
+- stage: DeployLoggingStack
+  displayName: 'Instalar ELK Stack (Elasticsearch, Logstash, Kibana)'
+  dependsOn: DeployMonitoringStack
   condition: succeeded()
   jobs:
     - job: InstallELK
-      displayName: 'Instalar Elasticsearch, Kibana y Logstash'
+      displayName: 'Instalar Elasticsearch, Kibana y Logstash con Helm'
       pool:
         vmImage: 'ubuntu-latest'
       steps:
@@ -195,47 +195,72 @@ stages:
               az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
 
         - script: |
-            echo "🔧 Crear namespace logging si no existe"
+            echo "🛠 Crear namespace logging si no existe"
             kubectl create namespace logging --dry-run=client -o yaml | kubectl apply -f -
 
-            echo "📦 Agregar repositorio Helm para ELK"
+            echo "🔐 Crear secreto con contraseña de elastic"
+            kubectl delete secret elastic-credentials -n logging --ignore-not-found
+            kubectl create secret generic elastic-credentials --from-literal=password='changeme123' -n logging
+
+            echo "📦 Agregar repositorio Helm Elastic"
             helm repo add elastic https://helm.elastic.co
             helm repo update
 
-            echo "🚀 Instalar Elasticsearch con autenticación habilitada"
+            echo "🚀 Instalar Elasticsearch"
             helm upgrade --install elasticsearch elastic/elasticsearch \
               --namespace logging \
               --set replicas=1 \
-              --set minimumMasterNodes=1 \
-              --set antiAffinity="soft" \
-              --set resources.requests.cpu="" \
-              --set resources.requests.memory="" \
-              --set resources.limits.cpu="" \
-              --set resources.limits.memory="" \
-              --set auth.enabled=true \
-              --set auth.password='TuPasswordSegura123'
-
-            echo "🚀 Instalar Kibana"
-            helm upgrade --install kibana elastic/kibana \
-              --namespace logging \
-              --set service.type=ClusterIP \
-              --set resources.requests.cpu="" \
-              --set resources.requests.memory="" \
-              --set resources.limits.cpu="" \
-              --set resources.limits.memory="" \
-              --set elasticsearchURL=http://elasticsearch-master.logging.svc.cluster.local:9200 \
-              --set elasticsearch.auth.enabled=true \
-              --set elasticsearch.auth.password='TuPasswordSegura123'
-
-            echo "🚀 Instalar Logstash"
-            helm upgrade --install logstash elastic/logstash \
-              --namespace logging \
-              --set service.type=ClusterIP \
-              --set logstashConfig.logstash.yml."http.host"="0.0.0.0" \
-              --set logstashPipeline."logstash\.conf"="input { beats { port => 5044 } } output { elasticsearch { hosts => [\"http://elasticsearch-master:9200\"] user => \"elastic\" password => \"$(ELASTIC_PASSWORD)\" } }" \
+              --set volumeClaimTemplate.storageClassName="" \
+              --set volumeClaimTemplate.resources.requests.storage=1Gi \
+              --set secret.name=elastic-credentials \
+              --set extraEnvs[0].name=ELASTIC_PASSWORD \
+              --set extraEnvs[0].valueFrom.secretKeyRef.name=elastic-credentials \
+              --set extraEnvs[0].valueFrom.secretKeyRef.key=password \
               --set resources.requests.cpu="" \
               --set resources.requests.memory="" \
               --set resources.limits.cpu="" \
               --set resources.limits.memory=""
-          displayName: 'Instalar ELK Stack en logging'
 
+            echo "🚀 Instalar Kibana"
+            helm upgrade --install kibana elastic/kibana \
+              --namespace logging \
+              --set elasticsearchHosts="http://elasticsearch-master:9200" \
+              --set env.ELASTICSEARCH_USERNAME=elastic \
+              --set env.ELASTICSEARCH_PASSWORD=changeme123 \
+              --set service.type=ClusterIP
+
+            echo "📝 Crear archivo de configuración para Logstash"
+            cat <<EOF > values-logstash.yaml
+            logstashPipeline:
+              logstash.conf: |
+                input {
+                  beats {
+                    port => 5044
+                  }
+                }
+                output {
+                  elasticsearch {
+                    hosts => ["http://elasticsearch-master:9200"]
+                    user => "elastic"
+                    password => "changeme123"
+                  }
+                }
+            extraEnvs:
+              - name: ELASTIC_USER
+                value: elastic
+              - name: ELASTIC_PASSWORD
+                value: changeme123
+            resources:
+              requests:
+                cpu: ""
+                memory: ""
+              limits:
+                cpu: ""
+                memory: ""
+            EOF
+
+            echo "🚀 Instalar Logstash"
+            helm upgrade --install logstash elastic/logstash \
+              --namespace logging \
+              -f values-logstash.yaml
+          displayName: 'Desplegar ELK Stack'
