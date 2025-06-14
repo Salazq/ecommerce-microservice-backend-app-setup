@@ -200,16 +200,20 @@ stages:
 
             kubectl create namespace logging --dry-run=client -o yaml | kubectl apply -f -
 
+            echo "🧹 Limpiando recursos anteriores..."
             helm uninstall elasticsearch -n logging --ignore-not-found
             helm uninstall kibana -n logging --ignore-not-found
             helm uninstall fluent-bit -n logging --ignore-not-found
             kubectl delete pvc -n logging --all --ignore-not-found
+            kubectl delete configmap -n logging kibana-kibana-helm-scripts --ignore-not-found
+            kubectl delete configmap -n logging fluent-bit-config --ignore-not-found
 
+            echo "🔄 Actualizando repositorios Helm..."
             helm repo add elastic https://helm.elastic.co
             helm repo add fluent https://fluent.github.io/helm-charts
             helm repo update
 
-            # Elasticsearch sin TLS ni autenticación
+            echo "📦 Instalando Elasticsearch..."
             helm install elasticsearch elastic/elasticsearch \
               --namespace logging \
               --set replicas=1 \
@@ -231,8 +235,10 @@ stages:
               --timeout=10m \
               --wait
 
+            echo "⏳ Esperando a que Elasticsearch esté listo..."
             kubectl wait --for=condition=ready pod -l app=elasticsearch-master -n logging --timeout=300s
 
+            echo "📦 Instalando Kibana..."
             helm install kibana elastic/kibana \
               --namespace logging \
               --set elasticsearchHosts="http://elasticsearch-master:9200" \
@@ -242,6 +248,7 @@ stages:
               --timeout=10m \
               --wait
 
+            echo "📄 Generando configuración para Fluent Bit..."
             cat <<EOF > fluent-bit-config.yaml
             config:
               service: |
@@ -297,6 +304,7 @@ stages:
                     Time_Keep On
             EOF
 
+            echo "📦 Instalando Fluent Bit..."
             helm install fluent-bit fluent/fluent-bit \
               --namespace logging \
               --values fluent-bit-config.yaml \
