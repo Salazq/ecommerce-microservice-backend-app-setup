@@ -18,6 +18,10 @@ variables:
   - group: variable-group-taller
   - name: environmentPath
     value: 'terraform/environments/${{ parameters.environment }}'
+  - name: aksResourceGroup
+    value: '${{ parameters.environment }}-resource-group'
+  - name: aksClusterName
+    value: '${{ parameters.environment }}-aks-cluster'
 
 stages:
 - stage: Terraform_plan_apply_${{ parameters.environment }}
@@ -125,3 +129,201 @@ stages:
           displayName: 'Cleanup temporary files'
           continueOnError: true
           condition: always()
+
+- stage: DeployMonitoringStack
+  displayName: 'Instalar Prometheus & Grafana con Helm'
+  dependsOn: Terraform_plan_apply_${{ parameters.environment }}
+  condition: succeeded()
+  jobs:
+    - job: InstallMonitoring
+      displayName: 'Helm Install kube-prometheus-stack'
+      pool:
+        vmImage: 'ubuntu-latest'
+      steps:
+        - task: HelmInstaller@1
+          inputs:
+            helmVersionToInstall: '3.13.3'
+        - task: AzureCLI@2
+          displayName: 'Login en AKS'
+          inputs:
+            azureSubscription:  $(AZURE_ACCOUNT)  # Debe estar configurado en Azure DevOps
+            scriptType: 'bash'
+            scriptLocation: 'inlineScript'
+            inlineScript: |
+              az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
+
+        - script: |
+            echo "🔧 Crear namespace monitoring si no existe"
+            kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+
+            echo "📦 Agregar repositorio Helm de Prometheus"
+            helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+            helm repo update
+
+            echo "🚀 Instalar kube-prometheus-stack con configuración para Nginx"
+            helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+              --namespace monitoring \
+              --set grafana.adminPassword='MiPassword123' \
+              --set grafana.service.type=ClusterIP \
+              --set grafana.env.GF_SERVER_ROOT_URL='http://localhost/grafana/' \
+              --set prometheus.service.type=ClusterIP \
+              --set prometheus.prometheusSpec.externalUrl='http://localhost/prometheus/'\
+              --set prometheus.prometheusSpec.routePrefix='/prometheus'
+          displayName: 'Instalar Prometheus y Grafana en monitoring'
+
+
+- stage: DeployLoggingStack
+  displayName: 'Instalar ELK Stack (Elasticsearch, Logstash, Kibana)'
+  dependsOn: DeployMonitoringStack
+  condition: succeeded()
+  jobs:
+    - job: InstallELK
+      displayName: 'Instalar Elasticsearch, Kibana y Logstash con Helm'
+      pool:
+        vmImage: 'ubuntu-latest'
+      steps:
+        - task: HelmInstaller@1
+          inputs:
+            helmVersionToInstall: '3.13.3'
+        - task: AzureCLI@2
+          displayName: 'Login en AKS'
+          inputs:
+            azureSubscription: $(AZURE_ACCOUNT)
+            scriptType: 'bash'
+            scriptLocation: 'inlineScript'
+            inlineScript: |
+              az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
+        - script: |
+            echo "🛠 Crear namespace logging si no existe"
+            kubectl create namespace logging --dry-run=client -o yaml | kubectl apply -f -
+            
+            echo "🔍 Verificar recursos disponibles en el cluster"
+            kubectl top nodes || echo "⚠️ Metrics server no disponible"
+            kubectl describe nodes | grep -A 5 "Allocated resources" || echo "⚠️ No se pudo obtener recursos"
+            helm uninstall elasticsearch -n logging --ignore-not-found
+            helm uninstall kibana -n logging --ignore-not-found  
+            helm uninstall logstash -n logging --ignore-not-found
+            kubectl delete configmap kibana-kibana-helm-scripts -n logging --ignore-not-found
+            
+            echo "🔐 Crear secreto con contraseña de elastic"
+            kubectl delete secret elastic-credentials -n logging --ignore-not-found
+            kubectl create secret generic elastic-credentials --from-literal=password='changeme123' -n logging
+            
+            echo "📦 Agregar repositorio Helm Elastic"
+            helm repo add elastic https://helm.elastic.co
+            helm repo update
+            
+            echo "🚀 Instalar Elasticsearch"
+            helm install elasticsearch elastic/elasticsearch \
+              --namespace logging \
+              --set replicas=1 \
+              --set volumeClaimTemplate.storageClassName="" \
+              --set volumeClaimTemplate.resources.requests.storage=1Gi \
+              --set secret.name=elastic-credentials \
+              --set extraEnvs[0].name=ELASTIC_PASSWORD \
+              --set extraEnvs[0].valueFrom.secretKeyRef.name=elastic-credentials \
+              --set extraEnvs[0].valueFrom.secretKeyRef.key=password \
+              --set security.enabled=false \
+              --set protocol=http \
+              --set resources.requests.cpu=10m \
+              --set resources.requests.memory=256Mi \
+              --set resources.limits.cpu=500m \
+              --set resources.limits.memory=512Mi \
+              --set esJavaOpts="-Xms128m -Xmx128m"
+              
+            echo "⏳ Esperar a que Elasticsearch esté listo (puede tardar varios minutos)"
+            kubectl wait --for=condition=ready pod -l app=elasticsearch-master -n logging --timeout=600s || echo "⚠️ Timeout esperando Elasticsearch, continuando..."
+            
+            echo "🔍 Estado actual de Elasticsearch:"
+            kubectl get pods -n logging -l app=elasticsearch-master
+            kubectl describe pods -n logging -l app=elasticsearch-master | grep -A 10 "Events:"
+            
+            echo "🚀 Instalar Kibana"
+            helm install kibana elastic/kibana \
+              --namespace logging \
+              --set elasticsearchHosts="http://elasticsearch-master:9200" \
+              --set env.ELASTICSEARCH_USERNAME=elastic \
+              --set env.ELASTICSEARCH_PASSWORD=changeme123 \
+              --set service.type=ClusterIP \
+              --set resources.requests.cpu=10m \
+              --set resources.requests.memory=128Mi \
+              --set resources.limits.cpu=200m \
+              --set resources.limits.memory=256Mi
+              
+            echo "📝 Crear archivo de configuración para Logstash"
+            cat <<EOF > values-logstash.yaml
+            logstashPipeline:
+              logstash.conf: |
+                input {
+                  beats {
+                    port => 5044
+                  }
+                }
+                filter {
+                  # Añadir filtros básicos si es necesario
+                  if [fields][service] {
+                    mutate {
+                      add_field => { "service_name" => "%{[fields][service]}" }
+                    }
+                  }
+                }
+                output {
+                  elasticsearch {
+                    hosts => ["http://elasticsearch-master:9200"]
+                    user => "elastic"
+                    password => "changeme123"
+                    index => "logs-%{+YYYY.MM.dd}"
+                  }
+                  stdout {
+                    codec => rubydebug
+                  }
+                }
+              extraEnvs:
+                - name: ELASTIC_USER
+                  value: elastic
+                - name: ELASTIC_PASSWORD
+                  value: changeme123
+                - name: LS_JAVA_OPTS
+                  value: "-Xms64m -Xmx64m"
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 128Mi
+                limits:
+                  cpu: 200m
+                  memory: 256Mi
+              logstashJavaOpts: "-Xms64m -Xmx64m"
+              service:
+                type: ClusterIP
+                ports:
+                  - name: beats
+                    port: 5044
+                    protocol: TCP
+                    targetPort: 5044
+              replicas: 1
+              EOF
+            
+            echo "🚀 Instalar Logstash"
+            helm install logstash elastic/logstash \
+              --namespace logging \
+              -f values-logstash.yaml
+              
+            echo "✅ Verificar el estado de los pods"
+            kubectl get pods -n logging -o wide
+            
+            echo "🔍 Verificar logs si hay problemas:"
+            echo "kubectl logs -n logging -l app=elasticsearch-master --tail=20"
+            echo "kubectl logs -n logging -l app=kibana --tail=20"
+            echo "kubectl logs -n logging -l app=logstash --tail=20"
+            
+            echo "🔍 Mostrar servicios disponibles"
+            kubectl get svc -n logging
+            
+            echo "📋 Información de conexión:"
+            echo "- Elasticsearch: http://elasticsearch-master.logging.svc.cluster.local:9200"
+            echo "- Kibana: http://kibana-kibana.logging.svc.cluster.local:5601"
+            echo "- Logstash: logstash-logstash-headless.logging.svc.cluster.local:5044"
+            echo "- Usuario: elastic"
+            echo "- Contraseña: changeme123"
+            
+          displayName: 'Desplegar ELK Stack'
