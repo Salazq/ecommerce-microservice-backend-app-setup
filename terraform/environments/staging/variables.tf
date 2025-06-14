@@ -37,7 +37,7 @@ variable "dns_prefix" {
 variable "vm_size" {
   description = "The size of the Virtual Machine instances in the AKS node pool."
   type        = string
-  default     = "Standard_B2s"
+  default     = "Standard_DS4_v2"
 }
 
 variable "prefix" {
