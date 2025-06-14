@@ -172,13 +172,13 @@ stages:
           displayName: 'Instalar Prometheus y Grafana en monitoring'
 
 
-- stage: DeployLoggingStack
-  displayName: 'Instalar ELK Stack Simple'
+- stage: DeployLoggingStackBasico
+  displayName: 'Desplegar ELK Stack Básico'
   dependsOn: DeployMonitoringStack
   condition: succeeded()
   jobs:
-    - job: InstallELKSimple
-      displayName: 'Instalar ELK Stack Simplificado'
+    - job: InstallELKBasic
+      displayName: 'Instalar Elasticsearch, Logstash y Kibana'
       pool:
         vmImage: 'ubuntu-latest'
       steps:
@@ -190,30 +190,22 @@ stages:
           displayName: 'Login en AKS'
           inputs:
             azureSubscription: $(AZURE_ACCOUNT)
-            scriptType: 'bash'
-            scriptLocation: 'inlineScript'
+            scriptType: bash
+            scriptLocation: inlineScript
             inlineScript: |
               az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
 
         - script: |
-            echo "🚀 Instalando ELK Stack simplificado..."
-
-            kubectl create namespace logging --dry-run=client -o yaml | kubectl apply -f -
-
             echo "🧹 Limpiando recursos anteriores..."
-            helm uninstall elasticsearch -n logging --ignore-not-found
-            helm uninstall kibana -n logging --ignore-not-found
-            helm uninstall fluent-bit -n logging --ignore-not-found
-            kubectl delete pvc -n logging --all --ignore-not-found
-            kubectl delete configmap -n logging kibana-kibana-helm-scripts --ignore-not-found
-            kubectl delete configmap -n logging fluent-bit-config --ignore-not-found
+            kubectl delete ns logging --ignore-not-found
+            kubectl create ns logging
 
-            echo "🔄 Actualizando repositorios Helm..."
             helm repo add elastic https://helm.elastic.co
-            helm repo add fluent https://fluent.github.io/helm-charts
             helm repo update
+          displayName: 'Inicializar Namespace y Repositorios'
 
-            echo "📦 Instalando Elasticsearch..."
+        - script: |
+            echo "📦 Instalando Elasticsearch (modo simple)..."
             helm install elasticsearch elastic/elasticsearch \
               --namespace logging \
               --set replicas=1 \
@@ -221,110 +213,65 @@ stages:
               --set persistence.enabled=false \
               --set security.enabled=false \
               --set protocol=http \
-              --set httpPort=9200 \
-              --set transportPort=9300 \
-              --set esJavaOpts="-Xms256m -Xmx256m" \
-              --set clusterName="simple-es" \
-              --set nodeGroup="master" \
-              --set extraEnvs[0].name="discovery.type" \
-              --set extraEnvs[0].value="single-node" \
-              --set extraEnvs[1].name="xpack.security.enabled" \
-              --set extraEnvs[1].value="false" \
-              --set extraEnvs[2].name="xpack.security.http.ssl.enabled" \
-              --set extraEnvs[2].value="false" \
-              --timeout=10m \
+              --set esJavaOpts="-Xms512m -Xmx512m" \
+              --set extraEnvs[0].name=discovery.type \
+              --set extraEnvs[0].value=single-node \
+              --set extraEnvs[1].name=xpack.security.enabled \
+              --set extraEnvs[1].value=false \
+              --set extraEnvs[2].name=xpack.security.http.ssl.enabled \
+              --set extraEnvs[2].value=false \
               --wait
+          displayName: 'Instalar Elasticsearch'
 
-            echo "⏳ Esperando a que Elasticsearch esté listo..."
-            kubectl wait --for=condition=ready pod -l app=elasticsearch-master -n logging --timeout=300s
-
+        - script: |
             echo "📦 Instalando Kibana..."
             helm install kibana elastic/kibana \
               --namespace logging \
-              --set elasticsearchHosts="http://elasticsearch-master:9200" \
+              --set elasticsearchHosts=http://elasticsearch-master:9200 \
               --set elasticsearch.ssl.enabled=false \
               --set service.type=ClusterIP \
-              --set service.port=5601 \
-              --timeout=10m \
               --wait
-
-            echo "📄 Generando configuración para Fluent Bit..."
-            cat <<EOF > fluent-bit-config.yaml
-            config:
-              service: |
-                [SERVICE]
-                    Daemon Off
-                    Flush 1
-                    Log_Level info
-                    Parsers_File parsers.conf
-                    Parsers_File custom_parsers.conf
-                    HTTP_Server On
-                    HTTP_Listen 0.0.0.0
-                    HTTP_Port 2020
-                    Health_Check On
-
-              inputs: |
-                [INPUT]
-                    Name tail
-                    Path /var/log/containers/*.log
-                    multiline.parser docker, cri
-                    Tag kube.*
-                    Mem_Buf_Limit 50MB
-                    Skip_Long_Lines On
-
-              filters: |
-                [FILTER]
-                    Name kubernetes
-                    Match kube.*
-                    Merge_Log On
-                    Keep_Log Off
-                    K8S-Logging.Parser On
-                    K8S-Logging.Exclude On
-
-              outputs: |
-                [OUTPUT]
-                    Name es
-                    Match kube.*
-                    Host elasticsearch-master.logging.svc.cluster.local
-                    Port 9200
-                    Index fluent-bit
-                    Type _doc
-                    Retry_Limit 3
-                    Replace_Dots On
-                    Logstash_Format On
-                    Logstash_Prefix kubernetes
-                    Logstash_DateFormat %Y.%m.%d
-
-              customParsers: |
-                [PARSER]
-                    Name docker
-                    Format json
-                    Time_Key time
-                    Time_Format %Y-%m-%dT%H:%M:%S.%L
-                    Time_Keep On
-            EOF
-
-            echo "📦 Instalando Fluent Bit..."
-            helm install fluent-bit fluent/fluent-bit \
-              --namespace logging \
-              --values fluent-bit-config.yaml \
-              --set livenessProbe.enabled=false \
-              --set readinessProbe.enabled=false \
-              --timeout=5m \
-              --wait
-
-            kubectl get pods -n logging -o wide
-            kubectl get svc -n logging
-          displayName: 'Instalar ELK Stack Simple'
+          displayName: 'Instalar Kibana'
 
         - script: |
-            echo "🔍 Verificación post-instalación..."
+            echo "📄 Creando ConfigMap de Logstash..."
+            cat <<EOF | kubectl apply -f -
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: logstash-config
+              namespace: logging
+            data:
+              logstash.conf: |
+                input {
+                  tcp {
+                    port => 5000
+                    codec => json
+                  }
+                }
+                output {
+                  elasticsearch {
+                    hosts => ["http://elasticsearch-master:9200"]
+                    index => "logstash-logs-%{+YYYY.MM.dd}"
+                  }
+                }
+            EOF
+          displayName: 'Crear ConfigMap de Logstash'
 
-            sleep 30
+        - script: |
+            echo "📦 Instalando Logstash..."
+            helm install logstash elastic/logstash \
+              --namespace logging \
+              --set logstashPipeline.enabled=true \
+              --set logstashPipeline.existingConfigMap=logstash-config \
+              --set service.type=ClusterIP \
+              --wait
+          displayName: 'Instalar Logstash'
 
-            kubectl get pods -n logging -o wide
-            kubectl get svc -n logging
-            kubectl exec -n logging deployment/elasticsearch-master -- curl -s http://localhost:9200/_cluster/health?pretty || echo "Elasticsearch aún iniciando..."
-            kubectl exec -n logging deployment/elasticsearch-master -- curl -s http://localhost:9200/_cat/indices || echo "Sin índices aún..."
-            kubectl get pods -n logging -l app.kubernetes.io/name=fluent-bit
+        - script: |
+            echo "🔍 Verificación:"
+            kubectl get all -n logging
+            echo "Para acceder a Kibana, haz port-forward:"
+            echo "kubectl port-forward svc/kibana-kibana 5601:5601 -n logging"
           displayName: 'Verificación Post-Instalación'
+
