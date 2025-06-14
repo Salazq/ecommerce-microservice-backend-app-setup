@@ -215,11 +215,11 @@ stages:
               --set protocol=http \
               --set esJavaOpts="-Xms512m -Xmx512m" \
               --set extraEnvs[0].name=discovery.type \
-              --set extraEnvs[0].value=single-node \
+              --set extraEnvs[0].value="single-node" \
               --set extraEnvs[1].name=xpack.security.enabled \
-              --set extraEnvs[1].value=false \
+              --set extraEnvs[1].value="false" \
               --set extraEnvs[2].name=xpack.security.http.ssl.enabled \
-              --set extraEnvs[2].value=false \
+              --set extraEnvs[2].value="false" \
               --wait
           displayName: 'Instalar Elasticsearch'
 
@@ -271,7 +271,7 @@ stages:
         - script: |
             echo "🔍 Verificación:"
             kubectl get all -n logging
-            echo "Para acceder a Kibana, haz port-forward:"
+            echo "Para acceder a Kibana, ejecuta:"
             echo "kubectl port-forward svc/kibana-kibana 5601:5601 -n logging"
           displayName: 'Verificación Post-Instalación'
 
