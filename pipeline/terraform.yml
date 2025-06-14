@@ -175,109 +175,56 @@ stages:
           displayName: 'Instalar Prometheus y Grafana en monitoring'
 
 
-- stage: InstallELKStack
-  displayName: 'Instalar ELK Stack completo en un solo stage'
+- stage: DeployEFK
+  displayName: 'Desplegar Stack EFK (Elastic + Fluent Bit + Kibana)'
   jobs:
-    - job: DeployELK
-      displayName: 'Deploy Elasticsearch, Kibana y Fluent Bit'
+    - job: DeployEFKStack
+      displayName: 'Instalar Elasticsearch, Fluent Bit y Kibana'
       pool:
         vmImage: 'ubuntu-latest'
       steps:
-        - task: AzureCLI@2
-          displayName: 'Autenticarse en Azure y desplegar ELK'
-          inputs:
-            azureSubscription:  $(AZURE_ACCOUNT)
-            scriptType: bash
-            scriptLocation: inlineScript
-            inlineScript: |
-              echo "🔐 Autenticando en Azure y configurando AKS..."
-              az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
 
-              echo "🔧 Añadiendo repositorios Helm..."
-              helm repo add elastic https://helm.elastic.co || true
-              helm repo add fluent https://fluent.github.io/helm-charts || true
+        - task: AzureCLI@2
+          displayName: 'Autenticarse con Azure y configurar kubectl'
+          inputs:
+            azureSubscription: '$(AZURE_ACCOUNT)'
+            scriptType: 'bash'
+            scriptLocation: 'inlineScript'
+            inlineScript: |
+              az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
+              kubectl create namespace logging --dry-run=client -o yaml | kubectl apply -f -
+
+        - task: Bash@3
+          displayName: 'Instalar EFK Stack con Helm'
+          inputs:
+            targetType: 'inline'
+            script: |
+              # Agregar repos
+              helm repo add elastic https://helm.elastic.co
+              helm repo add fluent https://fluent.github.io/helm-charts
               helm repo update
 
-              echo "🧹 Eliminando posibles instalaciones previas..."
-              helm uninstall elasticsearch -n $(kubernetesNamespace) || true
-              helm uninstall kibana -n $(kubernetesNamespace) || true
-              helm uninstall fluent-bit -n $(kubernetesNamespace) || true
-
-              echo "🚀 Creando namespace si no existe..."
-              kubectl create namespace $(kubernetesNamespace) --dry-run=client -o yaml | kubectl apply -f -                 
-              echo "📦 Instalando Elasticsearch sin autenticación (configuración avanzada)..."
+              echo "📦 Instalando Elasticsearch..."
               helm upgrade --install elasticsearch elastic/elasticsearch \
-                --namespace $(kubernetesNamespace) \
+                --namespace logging \
                 --set replicas=1 \
                 --set minimumMasterNodes=1 \
                 --set resources.requests.cpu="100m" \
                 --set resources.requests.memory="512Mi" \
-                --set resources.limits.cpu="500m" \
-                --set resources.limits.memory="1Gi" \
-                --set secret.enabled=false \
-                --set createCert=false \
-                --set esConfig."elasticsearch\.yml"="xpack.security.enabled: false\nxpack.security.transport.ssl.enabled: false\nxpack.security.http.ssl.enabled: false\nxpack.monitoring.collection.enabled: false\nxpack.security.enrollment.enabled: false\ndiscovery.type: single-node\nnetwork.host: 0.0.0.0" \
-                --set readinessProbe.initialDelaySeconds=60 \
-                --set readinessProbe.periodSeconds=30 \
-                --set readinessProbe.timeoutSeconds=30 \
-                --set readinessProbe.exec.command="['sh','-c','curl -f http://localhost:9200/_cluster/health?local=true']" \
-                --wait
+                --set volumeClaimTemplate.resources.requests.storage="1Gi"
 
-              echo "📊 Instalando Kibana sin autenticación..."
+              echo "📦 Instalando Kibana..."
               helm upgrade --install kibana elastic/kibana \
-                --namespace $(kubernetesNamespace) \
-                --set service.type=ClusterIP \
-                --set elasticsearchHosts="http://elasticsearch-master:9200" \
-                --set kibanaConfig."kibana\.yml"="elasticsearch.hosts: ['http://elasticsearch-master:9200']\nxpack.security.enabled: false\nxpack.encryptedSavedObjects.encryptionKey: 'min-32-char-long-strong-encryption-key'" \
-                --set extraEnvs[0].name=ELASTICSEARCH_USERNAME \
-                --set extraEnvs[0].value="" \
-                --set extraEnvs[1].name=ELASTICSEARCH_PASSWORD \
-                --set extraEnvs[1].value="" \
-                --wait              echo "🔥 Instalando Fluent Bit con configuración HTTP simplificada..."
+                --namespace logging \
+                --set service.type=NodePort \
+                --set service.nodePort=30601 \
+                --set resources.requests.memory="512Mi"
+
+
+              echo "📦 Instalando Fluent Bit..."
               helm upgrade --install fluent-bit fluent/fluent-bit \
-                --namespace $(kubernetesNamespace) \
-                --set env[0].name=FLUENT_ELASTICSEARCH_HOST \
-                --set env[0].value=elasticsearch-master \
-                --set env[1].name=FLUENT_ELASTICSEARCH_PORT \
-                --set env[1].value=9200 \
-                --set config.outputs="[OUTPUT]\n    Name es\n    Match *\n    Host elasticsearch-master\n    Port 9200\n    HTTP_User \"\"\n    HTTP_Passwd \"\"\n    tls Off\n    tls.verify Off\n    Logstash_Format On\n    Suppress_Type_Name On\n    Retry_Limit False" \
-                --wait
-
-              echo "⏳ Esperando 30 segundos para que Elasticsearch esté completamente listo..."
-              sleep 30
-
-              echo "✅ ELK Stack instalado correctamente en el namespace '$(kubernetesNamespace)'"              echo "🔍 Verificando estado de los pods..."
-              kubectl get pods -n $(kubernetesNamespace)
-
-              echo "⏳ Esperando a que todos los pods estén listos..."
-              kubectl wait --for=condition=ready pod -l app=elasticsearch-master -n $(kubernetesNamespace) --timeout=600s || echo "⚠️ Elasticsearch tardó más de lo esperado"
-              kubectl wait --for=condition=ready pod -l app=kibana -n $(kubernetesNamespace) --timeout=300s || echo "⚠️ Kibana tardó más de lo esperado"
-              kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=fluent-bit -n $(kubernetesNamespace) --timeout=180s || echo "⚠️ Fluent Bit tardó más de lo esperado"
-
-              echo "🧪 Probando conectividad a Elasticsearch..."
-              for i in {1..10}; do
-                if kubectl exec -n $(kubernetesNamespace) deployment/elasticsearch-master -- curl -f -s http://localhost:9200 > /dev/null 2>&1; then
-                  echo "✅ Elasticsearch está respondiendo!"
-                  break
-                else
-                  echo "⏳ Intento $i/10: Elasticsearch aún no responde, esperando 30s..."
-                  sleep 30
-                fi
-              done
-
-              echo "📊 Verificando índices en Elasticsearch..."
-              kubectl exec -n $(kubernetesNamespace) deployment/elasticsearch-master -- curl -s "http://localhost:9200/_cat/indices?v" || echo "❌ No se pudieron obtener índices"
-
-              echo "🔧 Diagnóstico de problemas..."
-              echo "--- Estado de pods ---"
-              kubectl get pods -n $(kubernetesNamespace) -o wide
-              echo "--- Eventos recientes ---"
-              kubectl get events -n $(kubernetesNamespace) --sort-by='.lastTimestamp' | tail -10
-              echo "--- Logs de Elasticsearch (últimas 10 líneas) ---"
-              kubectl logs -n $(kubernetesNamespace) -l app=elasticsearch-master --tail=10 || echo "No se pudieron obtener logs de Elasticsearch"
-              echo "--- Logs de Fluent Bit (últimas 5 líneas) ---"
-              kubectl logs -n $(kubernetesNamespace) -l app.kubernetes.io/name=fluent-bit --tail=5 || echo "No se pudieron obtener logs de Fluent Bit"
-
-              echo "🎉 Instalación del ELK Stack completada!"
-              echo "📝 Para acceder a Kibana, usa: kubectl port-forward -n $(kubernetesNamespace) svc/kibana-kibana 5601:5601"
-              echo "🔍 Para ver logs de Fluent Bit: kubectl logs -n $(kubernetesNamespace) -l app.kubernetes.io/name=fluent-bit"
+                --namespace logging \
+                --set backend.type=es \
+                --set backend.es.host=elasticsearch-master.logging.svc.cluster.local \
+                --set backend.es.port=9200 \
+                --set backend.es.logstash_prefix=aks-logs
