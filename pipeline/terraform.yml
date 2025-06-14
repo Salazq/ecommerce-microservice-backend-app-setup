@@ -167,6 +167,6 @@ stages:
               --set grafana.service.type=ClusterIP \
               --set grafana.env.GF_SERVER_ROOT_URL='http://localhost/grafana/' \
               --set prometheus.service.type=ClusterIP \
-              --set prometheus.prometheusSpec.externalUrl='http://localhost/prometheus/'
+              --set prometheus.prometheusSpec.externalUrl='http://localhost/prometheus/'\
               --set prometheus.prometheusSpec.routePrefix='/prometheus'
           displayName: 'Instalar Prometheus y Grafana en monitoring'
