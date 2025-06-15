@@ -22,8 +22,6 @@ variables:
     value: '${{ parameters.environment }}-resource-group'
   - name: aksClusterName
     value: '${{ parameters.environment }}-aks-cluster'
-  - name: kubernetesNamespace
-    value: 'logging'
 
 
 stages:
@@ -132,43 +130,6 @@ stages:
           displayName: 'Cleanup temporary files'
           continueOnError: true
           condition: always()
-
-- stage: DeployGrafanaMonitoring
-  displayName: 'Deploy Grafana Monitoring Stack'
-  dependsOn: []
-  condition: succeeded()
-  jobs:
-    - job: RunGrafanaMonitoring
-      displayName: 'Deploy .grafana script to AKS'
-      pool:
-        vmImage: 'ubuntu-latest'
-      steps:
-        - task: AzureCLI@2
-          displayName: 'Login to AKS Cluster'
-          inputs:
-            azureSubscription: $(AZURE_ACCOUNT)  # Cambia esto por tu nombre de servicio (Service Connection)
-            scriptType: bash
-            scriptLocation: inlineScript
-            inlineScript: |
-              az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
-          env:
-            AZURE_DEVOPS_EXT_AZURE_RM_SERVICE_PRINCIPAL_CERTIFICATE: $(AZURE_DEVOPS_EXT_AZURE_RM_SERVICE_PRINCIPAL_CERTIFICATE)
-
-        - task: DownloadSecureFile@1
-          name: grafanaDeployScriptFile
-          displayName: 'Download .grafana script'
-          inputs:
-            secureFile: '.grafana'
-
-        - script: |
-            chmod +x $(grafanaDeployScriptFile.secureFilePath)
-          displayName: 'Dar permisos de ejecución al script'
-
-        - task: Bash@3
-          displayName: 'Ejecutar script .grafana'
-          inputs:
-            filePath: $(grafanaDeployScriptFile.secureFilePath)
-
 
 - stage: DeployMonitoringStack
   displayName: 'Instalar Prometheus & Grafana con Helm'
