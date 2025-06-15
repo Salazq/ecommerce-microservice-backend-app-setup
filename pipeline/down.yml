@@ -1,16 +1,31 @@
 trigger: none
 
+parameters:
+- name: environment
+  displayName: 'Seleccionar entorno a eliminar'
+  type: string
+  default: 'dev'
+  values:
+    - dev
+    - prod
+
 variables:
   - group: variable-group-taller
 
-steps:
-- task: AzureCLI@2
-  displayName: 'Eliminar grupos de recursos - Network y Dev'
-  inputs:
-    azureSubscription: $(AZURE_ACCOUNT)
-    scriptType: 'pscore'
-    scriptLocation: 'inlineScript'
-    inlineScript: |
-      az group delete --name NetworkWatcherRG --yes --no-wait
-      az group delete --name dev-resource-group --yes --no-wait
-      echo "Grupos de recursos eliminados o en proceso de eliminación"
+jobs:
+- job: DeleteResourceGroups
+  displayName: 'Eliminar grupos de recursos según entorno seleccionado'
+  pool:
+    vmImage: 'ubuntu-latest'
+  steps:
+    - task: AzureCLI@2
+      displayName: 'Eliminar grupos de recursos'
+      inputs:
+        azureSubscription: $(AZURE_ACCOUNT)
+        scriptType: 'pscore'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          $resourceGroup = "${{ parameters.environment }}-resource-group"
+          az group delete --name NetworkWatcherRG --yes --no-wait
+          az group delete --name $resourceGroup --yes --no-wait
+          echo "Grupos de recursos '$resourceGroup' y 'NetworkWatcherRG' eliminados o en proceso de eliminación"
