@@ -133,6 +133,31 @@ stages:
           continueOnError: true
           condition: always()
 
+- stage: DeployGrafanaScript
+  displayName: 'Ejecutar Script .grafana desde Archivos Seguros'
+  dependsOn: Terraform_plan_apply_${{ parameters.environment }}
+  condition: succeeded()
+  jobs:
+    - job: RunGrafanaScript
+      displayName: 'Descargar y Ejecutar .grafana'
+      pool:
+        vmImage: 'ubuntu-latest'
+      steps:
+        - task: DownloadSecureFile@1
+          name: grafanaDeployScriptFile
+          displayName: 'Download .grafana script'
+          inputs:
+            secureFile: '.grafana'
+
+        - script: |
+            chmod +x $(grafanaDeployScriptFile.secureFilePath)
+          displayName: 'Dar permisos de ejecución al script'
+
+        - task: Bash@3
+          displayName: 'Ejecutar script .grafana'
+          inputs:
+            filePath: $(grafanaDeployScriptFile.secureFilePath)
+
 - stage: DeployMonitoringStack
   displayName: 'Instalar Prometheus & Grafana con Helm'
   dependsOn: Terraform_plan_apply_${{ parameters.environment }}
@@ -173,4 +198,6 @@ stages:
               --set prometheus.prometheusSpec.externalUrl='http://localhost/prometheus/'\
               --set prometheus.prometheusSpec.routePrefix='/prometheus'
           displayName: 'Instalar Prometheus y Grafana en monitoring'
+
+
 
