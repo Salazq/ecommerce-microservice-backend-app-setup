@@ -133,16 +133,27 @@ stages:
           continueOnError: true
           condition: always()
 
-- stage: DeployGrafanaScript
-  displayName: 'Ejecutar Script .grafana desde Archivos Seguros'
-  dependsOn: Terraform_plan_apply_${{ parameters.environment }}
+- stage: DeployGrafanaMonitoring
+  displayName: 'Deploy Grafana Monitoring Stack'
+  dependsOn: []
   condition: succeeded()
   jobs:
-    - job: RunGrafanaScript
-      displayName: 'Descargar y Ejecutar .grafana'
+    - job: RunGrafanaMonitoring
+      displayName: 'Deploy .grafana script to AKS'
       pool:
         vmImage: 'ubuntu-latest'
       steps:
+        - task: AzureCLI@2
+          displayName: 'Login to AKS Cluster'
+          inputs:
+            azureSubscription: $(AZURE_ACCOUNT)  # Cambia esto por tu nombre de servicio (Service Connection)
+            scriptType: bash
+            scriptLocation: inlineScript
+            inlineScript: |
+              az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
+          env:
+            AZURE_DEVOPS_EXT_AZURE_RM_SERVICE_PRINCIPAL_CERTIFICATE: $(AZURE_DEVOPS_EXT_AZURE_RM_SERVICE_PRINCIPAL_CERTIFICATE)
+
         - task: DownloadSecureFile@1
           name: grafanaDeployScriptFile
           displayName: 'Download .grafana script'
@@ -157,6 +168,7 @@ stages:
           displayName: 'Ejecutar script .grafana'
           inputs:
             filePath: $(grafanaDeployScriptFile.secureFilePath)
+
 
 - stage: DeployMonitoringStack
   displayName: 'Instalar Prometheus & Grafana con Helm'
